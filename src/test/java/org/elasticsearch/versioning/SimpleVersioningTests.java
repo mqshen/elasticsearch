@@ -54,7 +54,7 @@ import static org.hamcrest.Matchers.lessThanOrEqualTo;
 /**
  *
  */
-@Repeat(iterations = 50)
+@Repeat(iterations = 25)
 public class SimpleVersioningTests extends ElasticsearchIntegrationTest {
 
     @Test

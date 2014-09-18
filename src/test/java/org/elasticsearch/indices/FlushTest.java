@@ -33,7 +33,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.emptyIterable;
 import static org.hamcrest.Matchers.equalTo;
 
-@Repeat(iterations = 100)
+@Repeat(iterations = 50)
 public class FlushTest extends ElasticsearchIntegrationTest {
 
     @Test
