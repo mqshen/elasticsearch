@@ -477,6 +477,7 @@
                                 <param>-XX:+HeapDumpOnOutOfMemoryError</param>
                                 <param>-XX:HeapDumpPath=${tests.heapdump.path}</param>
                                 <param>-XX:+PrintCompilation</param>
+                                <param>-XX:+PrintAssembly</param>
                             </jvmArgs>
                             <shuffleOnSlave>${tests.shuffle}</shuffleOnSlave>
                             <sysouts>${tests.verbose}</sysouts>
