@@ -47,7 +47,7 @@
     <repositories>
         <repository>
           <id>Lucene Snapshot</id>
-          <url>http://people.apache.org/~rjernst/fake_staging_area/lucene-4.10-version-debug</url>
+          <url>http://people.apache.org/~mikemccand/fake_staging_area/4.10.1-debugversion</url>
         </repository>
         <repository>
             <id>Codehaus Snapshots</id>

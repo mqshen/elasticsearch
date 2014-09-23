@@ -570,7 +570,7 @@ public class PluginsService extends AbstractComponent {
             if (luceneVersion != null) {
                 // Should fail if the running node is too old!
                 org.apache.lucene.util.Version luceneExpectedVersion = Lucene.parseVersionLenient(luceneVersion, null);
-                if (Version.CURRENT.luceneVersion.equals(luceneExpectedVersion) || "4.10.0-special".equals(luceneVersion)) {
+                if (Version.CURRENT.luceneVersion.equals(luceneExpectedVersion) || "4.10.1-snapshot".equals(luceneVersion)) {
                     logger.debug("starting analysis plugin for Lucene [{}].", luceneExpectedVersion);
                     return true;
                 }

@@ -86,6 +86,8 @@ public class MockDirectoryHelper {
         w.setCheckIndexOnClose(false); // we do this on the index level
         w.setPreventDoubleWrite(preventDoubleWrite);
         w.setNoDeleteOpenFile(noDeleteOpenFile);
+        // TODO: enable this and fix picky tests!
+        w.setEnableVirusScanner(false);
         wrappers.add(w);
         return w;
     }

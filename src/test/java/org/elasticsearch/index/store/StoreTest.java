@@ -18,6 +18,11 @@
  */
 package org.elasticsearch.index.store;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.nio.file.NoSuchFileException;
+import java.util.*;
+
 import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.document.*;
@@ -26,6 +31,7 @@ import org.apache.lucene.store.*;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.TestUtil;
+import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.shard.ShardId;
@@ -34,11 +40,6 @@ import org.elasticsearch.index.store.distributor.LeastUsedDistributor;
 import org.elasticsearch.index.store.distributor.RandomWeightedDistributor;
 import org.elasticsearch.test.ElasticsearchLuceneTestCase;
 import org.junit.Test;
-
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.nio.file.NoSuchFileException;
-import java.util.*;
 
 import static com.carrotsearch.randomizedtesting.RandomizedTest.randomBoolean;
 import static com.carrotsearch.randomizedtesting.RandomizedTest.randomInt;
@@ -514,6 +515,7 @@ public class StoreTest extends ElasticsearchLuceneTestCase {
                 dirs[i]  = newDirectory(random);
                 if (dirs[i] instanceof MockDirectoryWrapper) {
                     ((MockDirectoryWrapper)dirs[i]).setPreventDoubleWrite(preventDoubleWrite);
+                    ((MockDirectoryWrapper)dirs[i]).setEnableVirusScanner(false);
                 }
             }
             this.random = random;
