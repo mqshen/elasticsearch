@@ -34,6 +34,7 @@ import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.test.CurrentTestFailedMarker;
 import org.elasticsearch.test.ElasticsearchIntegrationTest;
 import org.elasticsearch.test.ElasticsearchTestCase;
+import org.elasticsearch.test.PrintAllThreadStacksOnFailure;
 import org.elasticsearch.test.junit.listeners.ReproduceInfoPrinter;
 import org.junit.After;
 import org.junit.Before;
@@ -58,7 +59,8 @@ import java.util.logging.Logger;
 @Listeners({
         ReproduceInfoPrinter.class,
         FailureMarker.class,
-        CurrentTestFailedMarker.class
+        CurrentTestFailedMarker.class,
+        PrintAllThreadStacksOnFailure.class
 })
 @RunWith(value = com.carrotsearch.randomizedtesting.RandomizedRunner.class)
 @SuppressCodecs(value = "Lucene3x")
@@ -371,12 +373,16 @@ public abstract class AbstractRandomizedTest extends RandomizedTest {
     // Suite and test case setup/ cleanup.
     // -----------------------------------------------------------------
 
+    /** MockFSDirectoryService sets this: */
+    public static boolean checkIndexFailed;
+
     /**
      * For subclasses to override. Overrides must call {@code super.setUp()}.
      */
     @Before
     public void setUp() throws Exception {
         parentChainCallRule.setupCalled = true;
+        checkIndexFailed = false;
     }
 
     /**
@@ -385,6 +391,7 @@ public abstract class AbstractRandomizedTest extends RandomizedTest {
     @After
     public void tearDown() throws Exception {
         parentChainCallRule.teardownCalled = true;
+        assertFalse("at least one shard failed CheckIndex", checkIndexFailed);
     }
 
 

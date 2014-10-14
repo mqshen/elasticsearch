@@ -51,6 +51,7 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.util.concurrent.AbstractRunnable;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.index.analysis.AnalysisService;
@@ -358,13 +359,9 @@ public class InternalEngine extends AbstractIndexShardComponent implements Engin
                     if (!get.loadSource()) {
                         return new GetResult(true, versionValue.version(), null);
                     }
-                    try {
-                        Translog.Source source = translog.readSource(versionValue.translogLocation());
-                        if (source != null) {
-                            return new GetResult(true, versionValue.version(), source);
-                        }
-                    } catch (IOException e) {
-                        // switched on us, read it from the reader
+                    Translog.Operation op = translog.read(versionValue.translogLocation());
+                    if (op != null) {
+                        return new GetResult(true, versionValue.version(), op.getSource());
                     }
                 }
             }
@@ -1013,34 +1010,37 @@ public class InternalEngine extends AbstractIndexShardComponent implements Engin
             throw new OptimizeFailedEngineException(shardId, t);
         }
     }
+    
+    private void waitForMerges(boolean flushAfter) {
+        try {
+            currentIndexWriter().waitForMerges();
+        } catch (IOException e) {
+            throw new OptimizeFailedEngineException(shardId, e);
+        }
+        if (flushAfter) {
+            flush(new Flush().force(true).waitIfOngoing(true));
+        }
+    }
 
     @Override
     public void optimize(Optimize optimize) throws EngineException {
-        if (optimize.flush()) {
-            flush(new Flush().force(true).waitIfOngoing(true));
-        }
         if (optimizeMutex.compareAndSet(false, true)) {
-            ElasticsearchMergePolicy elasticsearchMergePolicy = null;
             try (InternalLock _ = readLock.acquire()) {
                 final IndexWriter writer = currentIndexWriter();
 
-                if (writer.getConfig().getMergePolicy() instanceof ElasticsearchMergePolicy) {
-                    elasticsearchMergePolicy = (ElasticsearchMergePolicy) writer.getConfig().getMergePolicy();
-                }
-                if (optimize.force() && elasticsearchMergePolicy == null) {
-                    throw new ElasticsearchIllegalStateException("The `force` flag can only be used if the merge policy is an instance of "
-                            + ElasticsearchMergePolicy.class.getSimpleName() + ", got [" + writer.getConfig().getMergePolicy().getClass().getName() + "]");
-                }
-
                 /*
-                 * The way we implement "forced forced merges" is a bit hackish in the sense that we set an instance variable and that this
-                 * setting will thus apply to all forced merges that will be run until `force` is set back to false. However, since
-                 * InternalEngine.optimize is the only place in code where we call forceMerge and since calls are protected with
-                 * `optimizeMutex`, this has the expected behavior.
+                 * The way we implement upgrades is a bit hackish in the sense that we set an instance
+                 * variable and that this setting will thus apply to the next forced merge that will be run.
+                 * This is ok because (1) this is the only place we call forceMerge, (2) we have a single
+                 * thread for optimize, and the 'optimizeMutex' guarding this code, and (3) ConcurrentMergeScheduler
+                 * syncs calls to findForcedMerges.
                  */
-                if (optimize.force()) {
-                    elasticsearchMergePolicy.setForce(true);
+                MergePolicy mp = writer.getConfig().getMergePolicy();
+                assert mp instanceof ElasticsearchMergePolicy : "MergePolicy is " + mp.getClass().getName();
+                if (optimize.upgrade()) {
+                    ((ElasticsearchMergePolicy)mp).setUpgradeInProgress(true);
                 }
+                
                 if (optimize.onlyExpungeDeletes()) {
                     writer.forceMergeDeletes(false);
                 } else if (optimize.maxNumSegments() <= 0) {
@@ -1053,23 +1053,25 @@ public class InternalEngine extends AbstractIndexShardComponent implements Engin
                 maybeFailEngine(t, "optimize");
                 throw new OptimizeFailedEngineException(shardId, t);
             } finally {
-                if (elasticsearchMergePolicy != null) {
-                    elasticsearchMergePolicy.setForce(false);
-                }
                 optimizeMutex.set(false);
             }
-
         }
+        
         // wait for the merges outside of the read lock
         if (optimize.waitForMerge()) {
-            try {
-                currentIndexWriter().waitForMerges();
-            } catch (IOException e) {
-                throw new OptimizeFailedEngineException(shardId, e);
-            }
-        }
-        if (optimize.flush()) {
-            flush(new Flush().force(true).waitIfOngoing(true));
+            waitForMerges(optimize.flush());
+        } else if (optimize.flush()) {
+            // we only need to monitor merges for async calls if we are going to flush
+            threadPool.executor(ThreadPool.Names.OPTIMIZE).execute(new AbstractRunnable() {
+                @Override
+                public void onFailure(Throwable t) {
+                    logger.error("Exception while waiting for merges asynchronously after optimize", t);
+                }
+                @Override
+                protected void doRun() throws Exception {
+                    waitForMerges(true);
+                }
+            });
         }
     }
 
@@ -1735,7 +1737,7 @@ public class InternalEngine extends AbstractIndexShardComponent implements Engin
         }
 
         @Override
-        public void beforeMerge(OnGoingMerge merge) {
+        public synchronized void beforeMerge(OnGoingMerge merge) {
             if (numMergesInFlight.incrementAndGet() > maxNumMerges) {
                 if (isThrottling.getAndSet(true) == false) {
                     logger.info("now throttling indexing: numMergesInFlight={}, maxNumMerges={}", numMergesInFlight, maxNumMerges);
@@ -1745,7 +1747,7 @@ public class InternalEngine extends AbstractIndexShardComponent implements Engin
         }
 
         @Override
-        public void afterMerge(OnGoingMerge merge) {
+        public synchronized void afterMerge(OnGoingMerge merge) {
             if (numMergesInFlight.decrementAndGet() < maxNumMerges) {
                 if (isThrottling.getAndSet(false)) {
                     logger.info("stop throttling indexing: numMergesInFlight={}, maxNumMerges={}", numMergesInFlight, maxNumMerges);

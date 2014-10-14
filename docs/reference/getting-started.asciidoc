@@ -101,7 +101,7 @@ java -version
 echo $JAVA_HOME
 --------------------------------------------------
 
-Once we have Java set up, we can then download and run Elasticsearch. The binaries are available from http://www.elasticsearch.org/download[`www.elasticsearch.org/download`] along with all the releases that have been made in the past. For each release, you have a choice among a zip, tar, DEB, or RPM package. For simplicity, let's use the tar package.
+Once we have Java set up, we can then download and run Elasticsearch. The binaries are available from http://www.elasticsearch.org/download[`www.elasticsearch.org/download`] along with all the releases that have been made in the past. For each release, you have a choice among a `zip` or `tar` archive, or a `DEB` or `RPM` package. For simplicity, let's use the tar file.
 
 Let's download the Elasticsearch {version} tar as follows (Windows users should download the zip package):
 
@@ -839,7 +839,7 @@ In the above example, the `bool must_not` clause specifies a list of queries non
 
 We can combine `must`, `should`, and `must_not` clauses simultaneously inside a `bool` query. Furthermore, we can compose `bool` queries inside any of these `bool` clauses to mimic any complex multi-level boolean logic.
 
-This example returns all accounts of anybody who is 40 years old but don't live in ID(daho):
+This example returns all accounts of anybody who is 40 years old but don't live in ID(aho):
 
 [source,sh]
 --------------------------------------------------

@@ -586,16 +586,18 @@ public abstract class ElasticsearchIntegrationTest extends ElasticsearchTestCase
             clearDisruptionScheme();
             final Scope currentClusterScope = getCurrentClusterScope();
             try {
-                if (currentClusterScope != Scope.TEST) {
-                    MetaData metaData = client().admin().cluster().prepareState().execute().actionGet().getState().getMetaData();
-                    assertThat("test leaves persistent cluster metadata behind: " + metaData.persistentSettings().getAsMap(), metaData
+                if (cluster() != null) {
+                    if (currentClusterScope != Scope.TEST) {
+                        MetaData metaData = client().admin().cluster().prepareState().execute().actionGet().getState().getMetaData();
+                        assertThat("test leaves persistent cluster metadata behind: " + metaData.persistentSettings().getAsMap(), metaData
                             .persistentSettings().getAsMap().size(), equalTo(0));
-                    assertThat("test leaves transient cluster metadata behind: " + metaData.transientSettings().getAsMap(), metaData
+                        assertThat("test leaves transient cluster metadata behind: " + metaData.transientSettings().getAsMap(), metaData
                             .transientSettings().getAsMap().size(), equalTo(0));
+                    }
+                    ensureClusterSizeConsistency();
+                    cluster().wipe(); // wipe after to make sure we fail in the test that didn't ack the delete
+                    cluster().assertAfterTest();
                 }
-                ensureClusterSizeConsistency();
-                cluster().wipe(); // wipe after to make sure we fail in the test that didn't ack the delete
-                cluster().assertAfterTest();
             } finally {
                 if (currentClusterScope == Scope.TEST) {
                     clearClusters(); // it is ok to leave persistent / transient cluster state behind if scope is TEST
@@ -603,12 +605,8 @@ public abstract class ElasticsearchIntegrationTest extends ElasticsearchTestCase
             }
             logger.info("[{}#{}]: cleaned up after test", getTestClass().getSimpleName(), getTestName());
             success = true;
-        } catch (OutOfMemoryError e) {
-            if (e.getMessage().contains("unable to create new native thread")) {
-                ElasticsearchTestCase.printStackDump(logger);
-            }
-            throw e;
         } finally {
+            // TODO: it looks like CurrentTestFailedMarker is never set at this point, so testFailed() will always be false?
             if (!success || CurrentTestFailedMarker.testFailed()) {
                 // if we failed that means that something broke horribly so we should
                 // clear all clusters and if the current cluster is the global we shut that one
@@ -853,7 +851,7 @@ public abstract class ElasticsearchIntegrationTest extends ElasticsearchTestCase
                     DocumentMapper documentMapper = indexService.mapperService().documentMapper(type);
                     assertThat("document mapper doesn't exists on " + node, documentMapper, notNullValue());
                     for (String fieldName : fieldNames) {
-                        Set<String> matches = documentMapper.mappers().simpleMatchToFullName(fieldName);
+                        List<String> matches = documentMapper.mappers().simpleMatchToFullName(fieldName);
                         assertThat("field " + fieldName + " doesn't exists on " + node, matches, Matchers.not(emptyIterable()));
                     }
                 }
@@ -1162,27 +1160,19 @@ public abstract class ElasticsearchIntegrationTest extends ElasticsearchTestCase
     /**
      * Flushes and refreshes all indices in the cluster
      */
-    protected final void flushAndRefresh() {
-        flush(true);
+    protected final void flushAndRefresh(String... indices) {
+        flush(indices);
         refresh();
     }
 
     /**
-     * Flushes all indices in the cluster
+     * Flush some or all indices in the cluster.
      */
-    protected final FlushResponse flush() {
-        return flush(true);
-    }
-
-    private FlushResponse flush(boolean ignoreNotAllowed) {
+    protected final FlushResponse flush(String... indices) {
         waitForRelocation();
-        FlushResponse actionGet = client().admin().indices().prepareFlush().setWaitIfOngoing(true).execute().actionGet();
-        if (ignoreNotAllowed) {
-            for (ShardOperationFailedException failure : actionGet.getShardFailures()) {
-                assertThat("unexpected flush failure " + failure.reason(), failure.status(), equalTo(RestStatus.SERVICE_UNAVAILABLE));
-            }
-        } else {
-            assertNoFailures(actionGet);
+        FlushResponse actionGet = client().admin().indices().prepareFlush(indices).setWaitIfOngoing(true).execute().actionGet();
+        for (ShardOperationFailedException failure : actionGet.getShardFailures()) {
+            assertThat("unexpected flush failure " + failure.reason(), failure.status(), equalTo(RestStatus.SERVICE_UNAVAILABLE));
         }
         return actionGet;
     }
@@ -1192,7 +1182,7 @@ public abstract class ElasticsearchIntegrationTest extends ElasticsearchTestCase
      */
     protected OptimizeResponse optimize() {
         waitForRelocation();
-        OptimizeResponse actionGet = client().admin().indices().prepareOptimize().setForce(randomBoolean()).execute().actionGet();
+        OptimizeResponse actionGet = client().admin().indices().prepareOptimize().execute().actionGet();
         assertNoFailures(actionGet);
         return actionGet;
     }

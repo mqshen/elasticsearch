@@ -64,6 +64,7 @@ public class ThreadPool extends AbstractComponent {
     public static class Names {
         public static final String SAME = "same";
         public static final String GENERIC = "generic";
+        public static final String LISTENER = "listener";
         public static final String GET = "get";
         public static final String INDEX = "index";
         public static final String BULK = "bulk";
@@ -116,7 +117,10 @@ public class ThreadPool extends AbstractComponent {
                 .put(Names.SEARCH, settingsBuilder().put("type", "fixed").put("size", availableProcessors * 3).put("queue_size", 1000).build())
                 .put(Names.SUGGEST, settingsBuilder().put("type", "fixed").put("size", availableProcessors).put("queue_size", 1000).build())
                 .put(Names.PERCOLATE, settingsBuilder().put("type", "fixed").put("size", availableProcessors).put("queue_size", 1000).build())
-                .put(Names.MANAGEMENT, settingsBuilder().put("type", "fixed").put("size", halfProcMaxAt5).put("queue_size", 100).build())
+                .put(Names.MANAGEMENT, settingsBuilder().put("type", "scaling").put("keep_alive", "5m").put("size", 5).build())
+                // no queue as this means clients will need to handle rejections on listener queue even if the operation succeeded
+                // the assumption here is that the listeners should be very lightweight on the listeners side
+                .put(Names.LISTENER, settingsBuilder().put("type", "fixed").put("size", halfProcMaxAt10).build())
                 .put(Names.FLUSH, settingsBuilder().put("type", "scaling").put("keep_alive", "5m").put("size", halfProcMaxAt5).build())
                 .put(Names.MERGE, settingsBuilder().put("type", "scaling").put("keep_alive", "5m").put("size", halfProcMaxAt5).build())
                 .put(Names.REFRESH, settingsBuilder().put("type", "scaling").put("keep_alive", "5m").put("size", halfProcMaxAt10).build())
@@ -267,7 +271,8 @@ public class ThreadPool extends AbstractComponent {
             }
         }
         while (!retiredExecutors.isEmpty()) {
-            result &= ((ThreadPoolExecutor) retiredExecutors.remove().executor()).awaitTermination(timeout, unit);
+            ThreadPoolExecutor executor = (ThreadPoolExecutor) retiredExecutors.remove().executor();
+            result &= executor.awaitTermination(timeout, unit);
         }
         estimatedTimeThread.join(unit.toMillis(timeout));
         return result;
@@ -704,4 +709,44 @@ public class ThreadPool extends AbstractComponent {
             updateSettings(settings);
         }
     }
+
+    /**
+     * Returns <code>true</code> if the given service was terminated successfully. If the termination timed out,
+     * the service is <code>null</code> this method will return <code>false</code>.
+     */
+    public static boolean terminate(ExecutorService service, long timeout, TimeUnit timeUnit) {
+        if (service != null) {
+            service.shutdown();
+            try {
+                if (service.awaitTermination(timeout, timeUnit)) {
+                    return true;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            service.shutdownNow();
+        }
+        return false;
+    }
+
+    /**
+     * Returns <code>true</code> if the given pool was terminated successfully. If the termination timed out,
+     * the service is <code>null</code> this method will return <code>false</code>.
+     */
+    public static boolean terminate(ThreadPool pool, long timeout, TimeUnit timeUnit) {
+        if (pool != null) {
+            pool.shutdown();
+            try {
+                if (pool.awaitTermination(timeout, timeUnit)) {
+                    return true;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            // last resort
+            pool.shutdownNow();
+        }
+        return false;
+    }
+
 }

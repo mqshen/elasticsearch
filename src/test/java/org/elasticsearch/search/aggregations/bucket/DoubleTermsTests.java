@@ -279,6 +279,38 @@ public class DoubleTermsTests extends ElasticsearchIntegrationTest {
             assertThat(bucket.getDocCount(), equalTo(1l));
         }
     }
+    
+    @Test
+    public void singleValueFieldWithFiltering() throws Exception {
+        double includes[] = { 1, 2, 3, 98.2 };
+        double excludes[] = { 2, 4, 99 };
+        double empty[] = {};
+        testIncludeExcludeResults(includes, empty, new double[] { 1, 2, 3 });
+        testIncludeExcludeResults(includes, excludes, new double[] { 1, 3 });
+        testIncludeExcludeResults(empty, excludes, new double[] { 0, 1, 3 });
+    }
+
+    private void testIncludeExcludeResults(double[] includes, double[] excludes, double[] expecteds) {
+        SearchResponse response = client().prepareSearch("idx").setTypes("type")
+                .addAggregation(terms("terms")
+                        .field(SINGLE_VALUED_FIELD_NAME)
+                        .include(includes)
+                        .exclude(excludes)
+                        .collectMode(randomFrom(SubAggCollectionMode.values())))
+                .execute().actionGet();
+        assertSearchResponse(response);
+        Terms terms = response.getAggregations().get("terms");
+        assertThat(terms, notNullValue());
+        assertThat(terms.getName(), equalTo("terms"));
+        assertThat(terms.getBuckets().size(), equalTo(expecteds.length));
+
+        for (int i = 0; i < expecteds.length; i++) {
+            Terms.Bucket bucket = terms.getBucketByKey("" + expecteds[i]);
+            assertThat(bucket, notNullValue());
+            assertThat(bucket.getDocCount(), equalTo(1l));
+        }
+    }
+    
 
     @Test
     public void singleValueField_OrderedByTermAsc() throws Exception {
@@ -1140,7 +1172,7 @@ public class DoubleTermsTests extends ElasticsearchIntegrationTest {
                 .setQuery(functionScoreQuery(matchAllQuery()).add(ScoreFunctionBuilders.scriptFunction("doc['" + SINGLE_VALUED_FIELD_NAME + "'].value")))
                 .addAggregation(terms("terms")
                         .collectMode(randomFrom(SubAggCollectionMode.values()))
-                        .script("ceil(_doc.score()/3)")
+                        .script("ceil(_score.doubleValue()/3)")
                 ).execute().actionGet();
 
         assertSearchResponse(response);

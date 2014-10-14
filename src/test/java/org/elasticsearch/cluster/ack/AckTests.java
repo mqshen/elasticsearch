@@ -85,7 +85,6 @@ public class AckTests extends ElasticsearchIntegrationTest {
     @Test
     public void testUpdateSettingsNoAcknowledgement() {
         createIndex("test");
-
         UpdateSettingsResponse updateSettingsResponse = client().admin().indices().prepareUpdateSettings("test").setTimeout("0s")
                 .setSettings(ImmutableSettings.builder().put("refresh_interval", 9999)).get();
         assertThat(updateSettingsResponse.isAcknowledged(), equalTo(false));
@@ -94,7 +93,8 @@ public class AckTests extends ElasticsearchIntegrationTest {
     @Test
     public void testPutWarmerAcknowledgement() {
         createIndex("test");
-        ensureGreen();
+        // make sure one shard is started so the search during put warmer will not fail
+        index("test", "type", "1", "f", 1);
 
         assertAcked(client().admin().indices().preparePutWarmer("custom_warmer")
                 .setSearchRequest(client().prepareSearch("test").setTypes("test").setQuery(QueryBuilders.matchAllQuery())));
@@ -112,7 +112,8 @@ public class AckTests extends ElasticsearchIntegrationTest {
     @Test
     public void testPutWarmerNoAcknowledgement() throws InterruptedException {
         createIndex("test");
-        ensureGreen();
+        // make sure one shard is started so the search during put warmer will not fail
+        index("test", "type", "1", "f", 1);
 
         PutWarmerResponse putWarmerResponse = client().admin().indices().preparePutWarmer("custom_warmer").setTimeout("0s")
                 .setSearchRequest(client().prepareSearch("test").setTypes("test").setQuery(QueryBuilders.matchAllQuery()))
@@ -139,7 +140,7 @@ public class AckTests extends ElasticsearchIntegrationTest {
     @Test
     public void testDeleteWarmerAcknowledgement() {
         createIndex("test");
-        ensureGreen();
+        index("test", "type", "1", "f", 1);
 
         assertAcked(client().admin().indices().preparePutWarmer("custom_warmer")
                 .setSearchRequest(client().prepareSearch("test").setTypes("test").setQuery(QueryBuilders.matchAllQuery())));
@@ -155,7 +156,7 @@ public class AckTests extends ElasticsearchIntegrationTest {
     @Test
     public void testDeleteWarmerNoAcknowledgement() throws InterruptedException {
         createIndex("test");
-        ensureGreen();
+        index("test", "type", "1", "f", 1);
 
         assertAcked(client().admin().indices().preparePutWarmer("custom_warmer")
                 .setSearchRequest(client().prepareSearch("test").setTypes("test").setQuery(QueryBuilders.matchAllQuery())));
@@ -403,6 +404,7 @@ public class AckTests extends ElasticsearchIntegrationTest {
 
         OpenIndexResponse openIndexResponse = client().admin().indices().prepareOpen("test").setTimeout("0s").get();
         assertThat(openIndexResponse.isAcknowledged(), equalTo(false));
+        ensureGreen("test"); // make sure that recovery from disk has completed, so that check index doesn't fail.
     }
 
     @Test

@@ -67,6 +67,7 @@ import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAllS
  */
 @ThreadLeakFilters(defaultFilters = true, filters = {ElasticsearchThreadFilter.class})
 @ThreadLeakScope(Scope.SUITE)
+@ThreadLeakLingering(linger = 5000) // 5 sec lingering
 @TimeoutSuite(millis = 20 * TimeUnits.MINUTE) // timeout the suite after 20min and fail the test.
 @Listeners(LoggingListener.class)
 public abstract class ElasticsearchTestCase extends AbstractRandomizedTest {
@@ -530,20 +531,13 @@ public abstract class ElasticsearchTestCase extends AbstractRandomizedTest {
         boolean terminated = true;
         for (ExecutorService service : services) {
             if (service != null) {
-                service.shutdown();
-                service.shutdownNow();
-                terminated &= service.awaitTermination(10, TimeUnit.SECONDS);
+                terminated &= ThreadPool.terminate(service, 10, TimeUnit.SECONDS);
             }
         }
         return terminated;
     }
 
     public static boolean terminate(ThreadPool service) throws InterruptedException {
-        if (service != null) {
-            service.shutdown();
-            service.shutdownNow();
-            return service.awaitTermination(10, TimeUnit.SECONDS);
-        }
-        return true;
+        return ThreadPool.terminate(service, 10, TimeUnit.SECONDS);
     }
 }

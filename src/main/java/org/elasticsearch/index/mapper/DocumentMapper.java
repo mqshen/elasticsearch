@@ -25,9 +25,11 @@ import com.google.common.collect.Sets;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.FieldType;
+import org.apache.lucene.index.AtomicReaderContext;
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.search.Filter;
 import org.apache.lucene.util.CloseableThreadLocal;
+import org.apache.lucene.util.FixedBitSet;
 import org.elasticsearch.ElasticsearchGenerationException;
 import org.elasticsearch.ElasticsearchIllegalArgumentException;
 import org.elasticsearch.common.Booleans;
@@ -44,6 +46,7 @@ import org.elasticsearch.common.text.Text;
 import org.elasticsearch.common.xcontent.*;
 import org.elasticsearch.common.xcontent.smile.SmileXContent;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
+import org.elasticsearch.index.cache.fixedbitset.FixedBitSetFilterCache;
 import org.elasticsearch.index.mapper.internal.*;
 import org.elasticsearch.index.mapper.object.ObjectMapper;
 import org.elasticsearch.index.mapper.object.RootObjectMapper;
@@ -280,7 +283,7 @@ public class DocumentMapper implements ToXContent {
     private final NamedAnalyzer searchAnalyzer;
     private final NamedAnalyzer searchQuoteAnalyzer;
 
-    private final DocumentFieldMappers fieldMappers;
+    private volatile DocumentFieldMappers fieldMappers;
 
     private volatile ImmutableMap<String, ObjectMapper> objectMappers = ImmutableMap.of();
 
@@ -345,8 +348,7 @@ public class DocumentMapper implements ToXContent {
         // now traverse and get all the statically defined ones
         rootObjectMapper.traverse(fieldMappersAgg);
 
-        this.fieldMappers = new DocumentFieldMappers(indexSettings, this);
-        this.fieldMappers.addNewMappers(fieldMappersAgg.mappers);
+        this.fieldMappers = new DocumentFieldMappers(this).copyAndAllAll(fieldMappersAgg.mappers);
 
         final Map<String, ObjectMapper> objectMappers = Maps.newHashMap();
         rootObjectMapper.traverse(new ObjectMapperListener() {
@@ -594,6 +596,45 @@ public class DocumentMapper implements ToXContent {
     }
 
     /**
+     * Returns the best nested {@link ObjectMapper} instances that is in the scope of the specified nested docId.
+     */
+    public ObjectMapper findNestedObjectMapper(int nestedDocId, FixedBitSetFilterCache cache, AtomicReaderContext context) throws IOException {
+        ObjectMapper nestedObjectMapper = null;
+        for (ObjectMapper objectMapper : objectMappers().values()) {
+            if (!objectMapper.nested().isNested()) {
+                continue;
+            }
+
+            FixedBitSet nestedTypeBitSet = cache.getFixedBitSetFilter(objectMapper.nestedTypeFilter()).getDocIdSet(context, null);
+            if (nestedTypeBitSet != null && nestedTypeBitSet.get(nestedDocId)) {
+                if (nestedObjectMapper == null) {
+                    nestedObjectMapper = objectMapper;
+                } else {
+                    if (nestedObjectMapper.fullPath().length() < objectMapper.fullPath().length()) {
+                        nestedObjectMapper = objectMapper;
+                    }
+                }
+            }
+        }
+        return nestedObjectMapper;
+    }
+
+    /**
+     * Returns the parent {@link ObjectMapper} instance of the specified object mapper or <code>null</code> if there
+     * isn't any.
+     */
+    // TODO: We should add: ObjectMapper#getParentObjectMapper()
+    public ObjectMapper findParentObjectMapper(ObjectMapper objectMapper) {
+        int indexOfLastDot = objectMapper.fullPath().lastIndexOf('.');
+        if (indexOfLastDot != -1) {
+            String parentNestObjectPath = objectMapper.fullPath().substring(0, indexOfLastDot);
+            return objectMappers().get(parentNestObjectPath);
+        } else {
+            return null;
+        }
+    }
+
+    /**
      * Transform the source when it is expressed as a map.  This is public so it can be transformed the source is loaded.
      * @param sourceAsMap source to transform.  This may be mutated by the script.
      * @return transformed version of transformMe.  This may actually be the same object as sourceAsMap
@@ -615,9 +656,9 @@ public class DocumentMapper implements ToXContent {
         return SmileXContent.smileXContent.createParser(builder.bytes());
     }
 
-    public void addFieldMappers(List<FieldMapper> fieldMappers) {
+    public void addFieldMappers(List<FieldMapper<?>> fieldMappers) {
         synchronized (mappersMutex) {
-            this.fieldMappers.addNewMappers(fieldMappers);
+            this.fieldMappers = this.fieldMappers.copyAndAllAll(fieldMappers);
         }
         for (FieldMapperListener listener : fieldMapperListeners) {
             listener.fieldMappers(fieldMappers);

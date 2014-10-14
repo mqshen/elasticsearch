@@ -21,6 +21,7 @@ package org.elasticsearch.index.query;
 
 
 import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
 import org.apache.lucene.analysis.core.WhitespaceAnalyzer;
 import org.apache.lucene.index.*;
 import org.apache.lucene.index.memory.MemoryIndex;
@@ -35,7 +36,9 @@ import org.apache.lucene.util.CharsRefBuilder;
 import org.apache.lucene.util.NumericUtils;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ElasticsearchIllegalArgumentException;
-import org.elasticsearch.action.get.MultiGetRequest;
+import org.elasticsearch.action.termvector.MultiTermVectorsRequest;
+import org.elasticsearch.action.termvector.TermVectorRequest;
+import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.compress.CompressedString;
 import org.elasticsearch.common.lucene.Lucene;
@@ -49,6 +52,7 @@ import org.elasticsearch.common.unit.DistanceUnit;
 import org.elasticsearch.common.unit.Fuzziness;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.index.cache.filter.support.CacheKeyFilter;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.core.NumberFieldMapper;
@@ -191,8 +195,9 @@ public class SimpleIndexQueryParserTests extends ElasticsearchSingleNodeTest {
         assertThat(parsedQuery, instanceOf(BooleanQuery.class));
         BooleanQuery bQuery = (BooleanQuery) parsedQuery;
         assertThat(bQuery.clauses().size(), equalTo(2));
-        assertThat(assertBooleanSubQuery(parsedQuery, TermQuery.class, 0).getTerm(), equalTo(new Term("name.first", "test")));
-        assertThat(assertBooleanSubQuery(parsedQuery, TermQuery.class, 1).getTerm(), equalTo(new Term("name.last", "test")));
+        assertEquals(Sets.newHashSet(new Term("name.first", "test"), new Term("name.last", "test")),
+                Sets.newHashSet(assertBooleanSubQuery(parsedQuery, TermQuery.class, 0).getTerm(),
+                        assertBooleanSubQuery(parsedQuery, TermQuery.class, 1).getTerm()));
     }
 
     @Test
@@ -1107,6 +1112,38 @@ public class SimpleIndexQueryParserTests extends ElasticsearchSingleNodeTest {
     }
 
     @Test
+    public void testTermsQueryWithMultipleFields() throws IOException {
+        IndexQueryParserService queryParser = queryParser();
+        String query = XContentFactory.jsonBuilder().startObject()
+                .startObject("terms").array("foo", 123).array("bar", 456).endObject()
+                .endObject().string();
+        try {
+            queryParser.parse(query).query();
+            fail();
+        } catch (QueryParsingException ex) {
+            assertThat(ex.getMessage(), equalTo("[test] [terms] query does not support multiple fields"));
+        }
+    }
+
+    @Test
+    public void testTermsFilterWithMultipleFields() throws IOException {
+        IndexQueryParserService queryParser = queryParser();
+        String query = XContentFactory.jsonBuilder().startObject()
+                .startObject("filtered")
+                .startObject("query").startObject("match_all").endObject().endObject()
+                .startObject("filter").startObject("terms").array("foo", 123).array("bar", 456).endObject().endObject()
+                .endObject().string();
+        try {
+            queryParser.parse(query).query();
+            fail();
+        } catch (QueryParsingException ex) {
+            assertThat(ex.getMessage(), equalTo("[test] [terms] filter does not support multiple fields"));
+        }
+    }
+
+
+
+    @Test
     public void testInQuery() throws IOException {
         IndexQueryParserService queryParser = queryParser();
         Query parsedQuery = queryParser.parse(termsQuery("name.first", Lists.newArrayList("test1", "test2", "test3"))).query();
@@ -1623,16 +1660,54 @@ public class SimpleIndexQueryParserTests extends ElasticsearchSingleNodeTest {
         }
     }
 
+    @Test
+    public void testMLTPercentTermsToMatch() throws Exception {
+        // setup for mocking fetching items
+        MoreLikeThisQueryParser parser = (MoreLikeThisQueryParser) queryParser.queryParser("more_like_this");
+        parser.setFetchService(new MockMoreLikeThisFetchService());
+
+        // parsing the ES query
+        IndexQueryParserService queryParser = queryParser();
+        String query = copyToStringFromClasspath("/org/elasticsearch/index/query/mlt-items.json");
+        BooleanQuery parsedQuery = (BooleanQuery) queryParser.parse(query).query();
+
+        // get MLT query, other clause is for include/exclude items
+        MoreLikeThisQuery mltQuery = (MoreLikeThisQuery) parsedQuery.getClauses()[0].getQuery();
+
+        // all terms must match
+        mltQuery.setMinimumShouldMatch("100%");
+        mltQuery.setMinWordLen(0);
+        mltQuery.setMinDocFreq(0);
+
+        // one document has all values
+        MemoryIndex index = new MemoryIndex();
+        index.addField("name.first", "apache lucene", new WhitespaceAnalyzer());
+        index.addField("name.last", "1 2 3 4", new WhitespaceAnalyzer());
+
+        // two clauses, one for items and one for like_text if set
+        BooleanQuery luceneQuery = (BooleanQuery) mltQuery.rewrite(index.createSearcher().getIndexReader());
+        BooleanClause[] clauses = luceneQuery.getClauses();
+
+        // check for items
+        int minNumberShouldMatch = ((BooleanQuery) (clauses[0].getQuery())).getMinimumNumberShouldMatch();
+        assertThat(minNumberShouldMatch, is(4));
+
+        // and for like_text
+        minNumberShouldMatch = ((BooleanQuery) (clauses[1].getQuery())).getMinimumNumberShouldMatch();
+        assertThat(minNumberShouldMatch, is(2));
+    }
+
     private static class MockMoreLikeThisFetchService extends MoreLikeThisFetchService {
 
         public MockMoreLikeThisFetchService() {
             super(null, ImmutableSettings.Builder.EMPTY_SETTINGS);
         }
 
-        public Fields[] fetch(List<MultiGetRequest.Item> items) throws IOException {
+        @Override
+        public Fields[] fetch(MultiTermVectorsRequest items) throws IOException {
             List<Fields> likeTexts = new ArrayList<>();
-            for (MultiGetRequest.Item item : items) {
-                likeTexts.add(generateFields(item.fields(), item.id()));
+            for (TermVectorRequest item : items) {
+                likeTexts.add(generateFields(item.selectedFields().toArray(Strings.EMPTY_ARRAY), item.id()));
             }
             return likeTexts.toArray(Fields.EMPTY_ARRAY);
         }
@@ -2418,7 +2493,7 @@ public class SimpleIndexQueryParserTests extends ElasticsearchSingleNodeTest {
         assertThat(parsedQuery, instanceOf(XConstantScoreQuery.class));
         assertThat(((XConstantScoreQuery) parsedQuery).getFilter(), instanceOf(CustomQueryWrappingFilter.class));
         assertThat(((CustomQueryWrappingFilter) ((XConstantScoreQuery) parsedQuery).getFilter()).getQuery(), instanceOf(ParentConstantScoreQuery.class));
-        assertThat(((CustomQueryWrappingFilter) ((XConstantScoreQuery) parsedQuery).getFilter()).getQuery().toString(), equalTo("parent_filter[foo](*:*)"));
+        assertThat(((CustomQueryWrappingFilter) ((XConstantScoreQuery) parsedQuery).getFilter()).getQuery().toString(), equalTo("parent_filter[foo](filtered(*:*)->cache(_type:foo))"));
         SearchContext.removeCurrent();
     }
 }

@@ -58,9 +58,6 @@ curl -XGET 'http://localhost:9200/_all/_aliases'
 curl -XGET 'http://localhost:9200/_aliases'
 --------------------------------------------------
 
-In addition, the <<alias-retrieving, get alias api>> now supports <<multi-index>> options and, by default, will
-produce an error response if a requested index does not exist.
-
 The <<indices-get-mapping, get mapping api>> will return a section for `mappings` even if there are 
 no mappings.  This ensures that the following two examples are equivalent:
 
@@ -71,4 +68,12 @@ curl -XGET 'http://localhost:9200/_all/_mappings'
 curl -XGET 'http://localhost:9200/_mappings'
 --------------------------------------------------
 
+==== Zen discovery
 
+Each cluster must have an elected master node in order to be fully operational. Once a node loses its elected master
+node it will reject some or all operations.
+
+On versions before `1.4.0.Beta1` all operations are rejected when a node loses its elected master. From `1.4.0.Beta1`
+only write operations will be rejected by default. Read operations will still be served based on the information available
+to the node, which may result in being partial and possibly also stale. If the default is undesired then the
+pre `1.4.0.Beta1` behaviour can be enabled, see: <<modules-discovery-zen,no-master-block>>

@@ -89,13 +89,6 @@ public class MapperService extends AbstractIndexComponent  {
     public static final String FIELD_MAPPERS_COLLECTION_SWITCH = "index.mapper.field_mappers_collection_switch";
     public static final int DEFAULT_FIELD_MAPPERS_COLLECTION_SWITCH = 100;
 
-    public static int getFieldMappersCollectionSwitch(@Nullable Settings settings) {
-        if (settings == null) {
-            return DEFAULT_FIELD_MAPPERS_COLLECTION_SWITCH;
-        }
-        return settings.getAsInt(MapperService.FIELD_MAPPERS_COLLECTION_SWITCH, MapperService.DEFAULT_FIELD_MAPPERS_COLLECTION_SWITCH);
-    }
-
     private final AnalysisService analysisService;
     private final IndexFieldDataService fieldDataService;
 
@@ -113,7 +106,7 @@ public class MapperService extends AbstractIndexComponent  {
     private final Object typeMutex = new Object();
     private final Object mappersMutex = new Object();
 
-    private final FieldMappersLookup fieldMappers;
+    private volatile FieldMappersLookup fieldMappers;
     private volatile ImmutableOpenMap<String, ObjectMappers> fullPathObjectMappers = ImmutableOpenMap.of();
     private boolean hasNested = false; // updated dynamically to true when a nested object is added
 
@@ -136,7 +129,7 @@ public class MapperService extends AbstractIndexComponent  {
         super(index, indexSettings);
         this.analysisService = analysisService;
         this.fieldDataService = fieldDataService;
-        this.fieldMappers = new FieldMappersLookup(indexSettings);
+        this.fieldMappers = new FieldMappersLookup();
         this.documentParser = new DocumentMapperParser(index, indexSettings, analysisService, postingsFormatService, docValuesFormatService, similarityLookupService, scriptService);
         this.searchAnalyzer = new SmartIndexNameSearchAnalyzer(analysisService.defaultSearchAnalyzer());
         this.searchQuoteAnalyzer = new SmartIndexNameSearchQuoteAnalyzer(analysisService.defaultSearchQuoteAnalyzer());
@@ -392,9 +385,9 @@ public class MapperService extends AbstractIndexComponent  {
         }
     }
 
-    private void addFieldMappers(List<FieldMapper> fieldMappers) {
+    private void addFieldMappers(List<FieldMapper<?>> fieldMappers) {
         synchronized (mappersMutex) {
-            this.fieldMappers.addNewMappers(fieldMappers);
+            this.fieldMappers = this.fieldMappers.copyAndAddAll(fieldMappers);
         }
     }
 
@@ -415,7 +408,7 @@ public class MapperService extends AbstractIndexComponent  {
 
     private void removeObjectAndFieldMappers(DocumentMapper docMapper) {
         synchronized (mappersMutex) {
-            fieldMappers.removeMappers(docMapper.mappers());
+            fieldMappers = fieldMappers.copyAndRemoveAll(docMapper.mappers());
 
             ImmutableOpenMap.Builder<String, ObjectMappers> fullPathObjectMappers = ImmutableOpenMap.builder(this.fullPathObjectMappers);
             for (ObjectMapper mapper : docMapper.objectMappers().values()) {
@@ -612,7 +605,7 @@ public class MapperService extends AbstractIndexComponent  {
      * Returns all the fields that match the given pattern, with an optional narrowing
      * based on a list of types.
      */
-    public Set<String> simpleMatchToIndexNames(String pattern, @Nullable String[] types) {
+    public List<String> simpleMatchToIndexNames(String pattern, @Nullable String[] types) {
         if (types == null || types.length == 0) {
             return simpleMatchToIndexNames(pattern);
         }
@@ -620,9 +613,9 @@ public class MapperService extends AbstractIndexComponent  {
             return simpleMatchToIndexNames(pattern);
         }
         if (!Regex.isSimpleMatchPattern(pattern)) {
-            return ImmutableSet.of(pattern);
+            return ImmutableList.of(pattern);
         }
-        Set<String> fields = Sets.newHashSet();
+        List<String> fields = Lists.newArrayList();
         for (String type : types) {
             DocumentMapper possibleDocMapper = mappers.get(type);
             if (possibleDocMapper != null) {
@@ -638,16 +631,16 @@ public class MapperService extends AbstractIndexComponent  {
      * Returns all the fields that match the given pattern. If the pattern is prefixed with a type
      * then the fields will be returned with a type prefix.
      */
-    public Set<String> simpleMatchToIndexNames(String pattern) {
+    public List<String> simpleMatchToIndexNames(String pattern) {
         if (!Regex.isSimpleMatchPattern(pattern)) {
-            return ImmutableSet.of(pattern);
+            return ImmutableList.of(pattern);
         }
         int dotIndex = pattern.indexOf('.');
         if (dotIndex != -1) {
             String possibleType = pattern.substring(0, dotIndex);
             DocumentMapper possibleDocMapper = mappers.get(possibleType);
             if (possibleDocMapper != null) {
-                Set<String> typedFields = Sets.newHashSet();
+                List<String> typedFields = Lists.newArrayList();
                 for (String indexName : possibleDocMapper.mappers().simpleMatchToIndexNames(pattern)) {
                     typedFields.add(possibleType + "." + indexName);
                 }
@@ -1130,12 +1123,12 @@ public class MapperService extends AbstractIndexComponent  {
 
     class InternalFieldMapperListener extends FieldMapperListener {
         @Override
-        public void fieldMapper(FieldMapper fieldMapper) {
-            addFieldMappers(Arrays.asList(fieldMapper));
+        public void fieldMapper(FieldMapper<?> fieldMapper) {
+            addFieldMappers(Collections.<FieldMapper<?>>singletonList(fieldMapper));
         }
 
         @Override
-        public void fieldMappers(List<FieldMapper> fieldMappers) {
+        public void fieldMappers(List<FieldMapper<?>> fieldMappers) {
             addFieldMappers(fieldMappers);
         }
     }

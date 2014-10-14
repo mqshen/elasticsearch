@@ -230,9 +230,6 @@ public class ScriptService extends AbstractComponent {
         }
         this.scriptEngines = builder.build();
 
-        // put some default optimized scripts
-        staticCache.put("doc.score", new CompiledScript("native", new DocScoreNativeScriptFactory()));
-
         // add file watcher for static scripts
         scriptsDirectory = new File(env.configFile(), "scripts");
         if (logger.isTraceEnabled()) {
@@ -540,8 +537,10 @@ public class ScriptService extends AbstractComponent {
         @Override
         public void onFileDeleted(File file) {
             Tuple<String, String> scriptNameExt = scriptNameExt(file);
-            logger.info("removing script file [{}]", file.getAbsolutePath());
-            staticCache.remove(scriptNameExt.v1());
+            if (scriptNameExt != null) {
+                logger.info("removing script file [{}]", file.getAbsolutePath());
+                staticCache.remove(scriptNameExt.v1());
+            }
         }
 
         @Override
@@ -572,24 +571,6 @@ public class ScriptService extends AbstractComponent {
         @Override
         public int hashCode() {
             return lang.hashCode() + 31 * script.hashCode();
-        }
-    }
-
-    public static class DocScoreNativeScriptFactory implements NativeScriptFactory {
-        @Override
-        public ExecutableScript newScript(@Nullable Map<String, Object> params) {
-            return new DocScoreSearchScript();
-        }
-    }
-
-    public static class DocScoreSearchScript extends AbstractFloatSearchScript {
-        @Override
-        public float runAsFloat() {
-            try {
-                return doc().score();
-            } catch (IOException e) {
-                return 0;
-            }
         }
     }
 }
